@@ -1,23 +1,20 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File
 import cv2
 import numpy as np
-import base64
+from typing import Tuple
+import shutil
 import tempfile
 
 app = FastAPI()
 
-class SignatureRequest(BaseModel):
-    reference_base64: str
-    candidate_base64: str
+def compare_signatures_orb(img1_path: str, img2_path: str) -> float:
+    """Returns a similarity score (0 to 100%) using ORB feature matching."""
+    img1 = cv2.imread(img1_path, cv2.IMREAD_GRAYSCALE)
+    img2 = cv2.imread(img2_path, cv2.IMREAD_GRAYSCALE)
 
-def decode_base64_image(base64_str: str) -> np.ndarray:
-    image_data = base64.b64decode(base64_str)
-    np_arr = np.frombuffer(image_data, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
-    return img
+    if img1 is None or img2 is None:
+        return 0.0
 
-def compare_signatures(img1: np.ndarray, img2: np.ndarray) -> float:
     orb = cv2.ORB_create()
     kp1, des1 = orb.detectAndCompute(img1, None)
     kp2, des2 = orb.detectAndCompute(img2, None)
@@ -27,16 +24,34 @@ def compare_signatures(img1: np.ndarray, img2: np.ndarray) -> float:
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(des1, des2)
+
+    # Sort matches by distance (lower is better)
     matches = sorted(matches, key=lambda x: x.distance)
 
+    # Calculate similarity based on how many good matches exist
     match_count = len(matches)
     keypoint_avg = (len(kp1) + len(kp2)) / 2
-    similarity = (match_count / keypoint_avg) * 100 if keypoint_avg else 0.0
+    if keypoint_avg == 0:
+        return 0.0
+
+    similarity = (match_count / keypoint_avg) * 100
     return round(min(similarity, 100.0), 2)
 
-@app.post("/compare-signatures-base64")
-def compare_signatures_base64(data: SignatureRequest):
-    img1 = decode_base64_image(data.reference_base64)
-    img2 = decode_base64_image(data.candidate_base64)
-    similarity = compare_signatures(img1, img2)
+def save_temp_file(upload_file: UploadFile) -> str:
+    """Save uploaded file temporarily and return the file path."""
+    suffix = upload_file.filename.split('.')[-1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
+        shutil.copyfileobj(upload_file.file, tmp)
+        return tmp.name
+
+@app.post("/compare-signatures")
+async def compare_signatures(
+    reference: UploadFile = File(...),
+    candidate: UploadFile = File(...)
+):
+    ref_path = save_temp_file(reference)
+    cand_path = save_temp_file(candidate)
+
+    similarity = compare_signatures_orb(ref_path, cand_path)
+
     return {"similarity_percent": similarity}
