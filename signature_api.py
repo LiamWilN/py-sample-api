@@ -3,7 +3,6 @@ from pydantic import BaseModel
 import cv2
 import numpy as np
 import base64
-import tempfile
 
 app = FastAPI()
 
